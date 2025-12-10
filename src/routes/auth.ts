@@ -68,8 +68,8 @@ const renderAuthPage = (c: any, type: 'login' | 'register', error?: string, form
 
 auth.post('/register', zValidator('form', registerSchema, async (result, c) => {
     if (!result.success) {
-        // Safe error access
-        const issue = result.error.issues?.[0] || result.error.errors?.[0];
+        // Safe error access (Zod v4 uses 'issues' only)
+        const issue = result.error.issues?.[0];
         const error = issue?.message || 'Invalid input';
         
         // Repulate form data (safeParse doesn't return data on error, need raw body)
@@ -105,7 +105,8 @@ auth.post('/register', zValidator('form', registerSchema, async (result, c) => {
 
 auth.post('/login', zValidator('form', registerSchema, async (result, c) => {
     if (!result.success) {
-        const issue = result.error.issues?.[0] || result.error.errors?.[0];
+        // Zod v4 uses 'issues' only
+        const issue = result.error.issues?.[0];
         const error = issue?.message || 'Invalid input';
         const formData = await c.req.parseBody();
         return renderAuthPage(c, 'login', error, formData);
