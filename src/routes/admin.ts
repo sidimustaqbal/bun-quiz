@@ -267,7 +267,7 @@ admin.get('/game/:sessionId', async (c) => {
                 <!-- Lobby Screen -->
                 <div x-show="!started" class="w-full max-w-5xl mx-auto text-center">
                     <div class="mb-12">
-                         <span class="text-xl font-bold text-purple-200 uppercase tracking-[0.2em] mb-2 block">Join at <span class="bg-white text-purple-700 px-2 rounded">bun-quiz.com</span> with PIN:</span>
+                         <span class="text-xl font-bold text-purple-200 uppercase tracking-[0.2em] mb-2 block">Join at <span class="bg-white text-purple-700 px-2 rounded">fun-quiz.com</span> with PIN:</span>
                          <h1 class="text-9xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-pink-500 to-purple-500 drop-shadow-2xl font-mono tracking-wider my-4">${session.pinCode}</h1>
                     </div>
 

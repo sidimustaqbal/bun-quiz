@@ -1,4 +1,4 @@
-# bun-quiz
+# fun-quiz
 
 To install dependencies:
 
