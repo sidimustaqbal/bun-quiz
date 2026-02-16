@@ -48,4 +48,5 @@ export default {
         return app.fetch(req, server);
     },
     websocket: websocketHandler,
+    port: process.env.PORT || 3000,
 };
