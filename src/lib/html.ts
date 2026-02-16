@@ -43,7 +43,7 @@ export const Layout = (props: { title: string; children: any; user?: any; fullWi
   <body class="bg-yellow-50 text-dark min-h-screen flex flex-col">
     <nav class="bg-purple-600 text-white p-4 shadow-lg ${props.fullWidth ? '' : 'mb-8'} relative z-50">
       <div class="container mx-auto flex justify-between items-center">
-        <a href="/admin/dashboard" class="text-3xl font-extrabold tracking-wider hover:animate-pulse">🎉 FunQuiz</a>
+        <a href="${props.user ? '/admin/dashboard' : '/'}" class="text-3xl font-extrabold tracking-wider hover:animate-pulse">🎉 FunQuiz</a>
         <div>
           ${props.user ? html`
             <span class="mr-4">Hi, ${props.user.username}!</span>

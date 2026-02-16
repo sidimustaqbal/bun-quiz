@@ -13,6 +13,7 @@ export const quizzes = sqliteTable('quizzes', {
   hostId: integer('host_id').references(() => users.id).notNull(),
   title: text('title').notNull(),
   description: text('description'),
+  mode: text('mode').default('HOST'), // 'HOST' or 'SELF_PACED'
   createdAt: integer('created_at', { mode: 'timestamp' }).default(new Date()),
 });
 
@@ -49,6 +50,7 @@ export const participants = sqliteTable('participants', {
   sessionId: integer('session_id').references(() => gameSessions.id).notNull(),
   name: text('name').notNull(),
   score: integer('score').default(0),
+  currentQuestionIndex: integer('current_question_index').default(-1), // For SELF_PACED
   joinedAt: integer('joined_at', { mode: 'timestamp' }).default(new Date()),
 });
 

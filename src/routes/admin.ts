@@ -111,6 +111,29 @@ admin.get('/quizzes/new', (c) => {
                         <textarea name="description" rows="3" placeholder="What is this quiz about?" 
                             class="w-full border-2 border-gray-200 p-4 rounded-xl text-lg focus:border-purple-500 focus:ring-4 focus:ring-purple-100 outline-none transition placeholder-gray-300 text-gray-800 resize-none"></textarea>
                     </div>
+
+                    <div class="mb-8">
+                        <label class="block font-bold text-gray-700 mb-2 text-lg">Game Pacing</label>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <!-- Host Paced (Default) -->
+                            <label class="relative flex items-center p-4 rounded-xl border-2 border-gray-200 cursor-pointer hover:border-purple-200 hover:bg-purple-50 transition">
+                                <input type="radio" name="mode" value="HOST" class="w-6 h-6 text-purple-600 border-gray-300 focus:ring-purple-500" checked>
+                                <div class="ml-4">
+                                    <span class="block font-bold text-gray-800 text-lg">Host Controlled</span>
+                                    <span class="block text-gray-500 text-sm">You control when to move to the next question. Updates for everyone at once.</span>
+                                </div>
+                            </label>
+
+                            <!-- Self Paced -->
+                            <label class="relative flex items-center p-4 rounded-xl border-2 border-gray-200 cursor-pointer hover:border-purple-200 hover:bg-purple-50 transition">
+                                <input type="radio" name="mode" value="SELF_PACED" class="w-6 h-6 text-purple-600 border-gray-300 focus:ring-purple-500">
+                                <div class="ml-4">
+                                    <span class="block font-bold text-gray-800 text-lg">Self Paced</span>
+                                    <span class="block text-gray-500 text-sm">Participants answer at their own speed. Ideal for assignments or asynchronous play.</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
                     <div class="flex flex-col sm:flex-row justify-end gap-4 pt-4 border-t border-gray-100">
                         <a href="/admin/dashboard" class="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition text-center">Cancel</a>
                         <button type="submit" class="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transform hover:-translate-y-1 transition text-lg w-full sm:w-auto">
@@ -129,11 +152,13 @@ admin.post('/quizzes', async (c) => {
     const body = await c.req.parseBody();
     const title = body['title'] as string;
     const description = body['description'] as string;
+    const mode = (body['mode'] as string) || 'HOST';
 
     await db.insert(quizzes).values({
         hostId: user.id,
         title,
-        description
+        description,
+        mode
     });
 
     return c.redirect('/admin/dashboard');
@@ -196,9 +221,8 @@ admin.post('/game/:sessionId/next', async (c) => {
     let nextIndex = (session.currentQuestionIndex || 0) + 1;
     
     if (nextIndex >= quizQuestions.length) {
-        // End of Game
         // Get Leaderboard
-        const { participants } = require('../db/schema');
+        // participants already imported at top
         const leaderboard = await db.select().from(participants)
             .where(eq(participants.sessionId, sessionId))
             .orderBy(desc(participants.score))
@@ -234,6 +258,33 @@ admin.post('/game/:sessionId/next', async (c) => {
     return c.json({ question: nextQ });
 });
 
+// API: Force End Game
+admin.post('/game/:sessionId/end', async (c) => {
+    const user = c.get('user');
+    const sessionId = parseInt(c.req.param('sessionId'));
+    const session = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId)).get();
+    if (!session) return c.json({error: 'Session not found'}, 404);
+
+    // Security: Ensure owner
+    const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
+    if (!quiz || quiz.hostId !== user.id) return c.json({error: 'Unauthorized'}, 403);
+
+    // Update Session Status
+    await db.update(gameSessions).set({ status: 'FINISHED' }).where(eq(gameSessions.id, sessionId));
+
+    // Get Final Leaderboard
+    const leaderboard = await db.select().from(participants)
+        .where(eq(participants.sessionId, sessionId))
+        .orderBy(desc(participants.score))
+        .limit(10)
+        .all();
+
+    // Broadcast Game Over to all
+    require('../ws/handler').broadcast(session.pinCode, { type: 'GAME_OVER', leaderboard });
+
+    return c.json({ gameOver: true, leaderboard });
+});
+
 // Host Game Controller Page
 admin.get('/game/:sessionId', async (c) => {
     const user = c.get('user');
@@ -247,8 +298,15 @@ admin.get('/game/:sessionId', async (c) => {
     const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
     if (!quiz || quiz.hostId !== user.id) return c.redirect('/admin/dashboard');
 
-    // Restore State: Fetch current players
-    const currentPlayers = await db.select({ id: participants.id, name: participants.name }).from(participants).where(eq(participants.sessionId, sessionId)).all();
+    const mode = quiz.mode || 'HOST';
+
+    // Restore State: Fetch current players with progress
+    const currentPlayers = await db.select({ 
+        id: participants.id, 
+        name: participants.name,
+        currentQuestionIndex: participants.currentQuestionIndex,
+        score: participants.score
+    }).from(participants).where(eq(participants.sessionId, sessionId)).all();
 
     // Restore State: If game has started (has currentQuestionIndex), fetch current question
     let currentQuestion = null;
@@ -264,16 +322,25 @@ admin.get('/game/:sessionId', async (c) => {
         }
     }
 
+    const hostConfig = {
+        initialPlayers: currentPlayers,
+        initialStarted: gameStarted,
+        initialQuestion: currentQuestion,
+        mode: mode,
+        initialProgress: mode === 'SELF_PACED' ? currentPlayers.map(p => ({
+            id: p.id, 
+            name: p.name, 
+            qIndex: p.currentQuestionIndex || 0,
+            score: p.score || 0
+        })) : []
+    };
+
     return c.html(Layout({
         title: 'Game Controller',
         user,
         children: html`
             <script>
-                window.__hostConfig = ${raw(JSON.stringify({
-                    initialPlayers: currentPlayers,
-                    initialStarted: gameStarted,
-                    initialQuestion: currentQuestion
-                }))};
+                window.__hostConfig = ${raw(JSON.stringify(hostConfig))};
             </script>
             <div class="min-h-[80vh] flex flex-col items-center justify-center p-4" x-data="gameController()">
                 
@@ -320,34 +387,80 @@ admin.get('/game/:sessionId', async (c) => {
                     <div class="bg-white rounded-3xl shadow-2xl overflow-hidden border-8 border-purple-200">
                         <!-- Header -->
                         <div class="bg-purple-600 p-6 flex justify-between items-center text-white">
-                             <h1 class="text-2xl font-bold opacity-80">Live Game</h1>
+                             <h1 class="text-2xl font-bold opacity-80">Live Game <span x-show="mode === 'SELF_PACED'" class="text-sm bg-white/20 px-2 py-1 rounded ml-2">Self Paced</span></h1>
                              <div class="font-mono bg-purple-800/50 px-4 py-1 rounded-lg">PIN: ${session.pinCode}</div>
                         </div>
 
                         <div class="p-10 text-center">
-                            <!-- Question Display -->
-                             <div class="mb-12">
-                                <span class="text-purple-500 font-bold tracking-widest uppercase text-sm mb-2 block">Current Question</span>
-                                <h2 class="text-4xl md:text-5xl font-black text-gray-800 leading-tight" x-text="currentQuestion ? currentQuestion.text : 'Get Ready...'"></h2>
-                             </div>
                             
-                            <!-- Stats Grid -->
-                            <div class="grid grid-cols-2 gap-8 mb-12 max-w-xl mx-auto">
-                                 <div class="bg-blue-50 p-6 rounded-2xl border-4 border-blue-100">
-                                    <span class="block text-6xl font-black text-blue-500 mb-2" x-text="answersCount">0</span>
-                                    <span class="text-gray-500 font-bold uppercase tracking-wider text-sm">Answers</span>
-                                 </div>
-                                 <div class="bg-pink-50 p-6 rounded-2xl border-4 border-pink-100">
-                                    <span class="block text-6xl font-black text-pink-500 mb-2" x-text="players.length">0</span>
-                                    <span class="text-gray-500 font-bold uppercase tracking-wider text-sm">Players</span>
-                                 </div>
-                            </div>
+                            <!-- HOST PACED VIEW -->
+                            <template x-if="mode === 'HOST'">
+                                <div>
+                                    <!-- Question Display -->
+                                     <div class="mb-12">
+                                        <span class="text-purple-500 font-bold tracking-widest uppercase text-sm mb-2 block">Current Question</span>
+                                        <h2 class="text-4xl md:text-5xl font-black text-gray-800 leading-tight" x-text="currentQuestion ? currentQuestion.text : 'Get Ready...'"></h2>
+                                     </div>
+                                    
+                                    <!-- Stats Grid -->
+                                    <div class="grid grid-cols-2 gap-8 mb-12 max-w-xl mx-auto">
+                                         <div class="bg-blue-50 p-6 rounded-2xl border-4 border-blue-100">
+                                            <span class="block text-6xl font-black text-blue-500 mb-2" x-text="answersCount">0</span>
+                                            <span class="text-gray-500 font-bold uppercase tracking-wider text-sm">Answers</span>
+                                         </div>
+                                         <div class="bg-pink-50 p-6 rounded-2xl border-4 border-pink-100">
+                                            <span class="block text-6xl font-black text-pink-500 mb-2" x-text="players.length">0</span>
+                                            <span class="text-gray-500 font-bold uppercase tracking-wider text-sm">Players</span>
+                                         </div>
+                                    </div>
 
-                            <!-- Controls -->
-                            <button class="w-full bg-indigo-600 hover:bg-indigo-800 text-white font-bold text-2xl py-6 rounded-2xl shadow-xl transform transition hover:-translate-y-1 active:translate-y-0 disabled:opacity-50 disabled:cursor-wait" 
-                                @click="nextQuestion">
-                                Next Question ➡️
-                            </button>
+                                    <!-- Controls -->
+                                    <button class="w-full bg-indigo-600 hover:bg-indigo-800 text-white font-bold text-2xl py-6 rounded-2xl shadow-xl transform transition hover:-translate-y-1 active:translate-y-0 disabled:opacity-50 disabled:cursor-wait" 
+                                        @click="nextQuestion">
+                                        Next Question ➡️
+                                    </button>
+                                </div>
+                            </template>
+
+                            <!-- SELF PACED VIEW -->
+                            <template x-if="mode === 'SELF_PACED'">
+                                <div>
+                                    <h2 class="text-3xl font-black text-gray-800 mb-6">Live Progress</h2>
+                                    
+                                    <div class="space-y-4 max-h-[60vh] overflow-y-auto px-4">
+                                        <template x-for="p in players" :key="p.id">
+                                            <div class="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
+                                                <div class="flex items-center gap-3">
+                                                    <div class="w-10 h-10 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center font-bold" x-text="p.name.charAt(0)"></div>
+                                                    <div class="text-left">
+                                                        <div class="font-bold text-gray-800" x-text="p.name"></div>
+                                                        <div class="text-xs text-gray-500 font-medium" x-text="p.status || 'Playing...'"></div>
+                                                    </div>
+                                                </div>
+                                                
+                                                 <div class="flex items-center gap-4">
+                                                    <div class="text-right">
+                                                        <span class="text-xs font-bold text-gray-400 uppercase block">Score</span>
+                                                        <span class="text-xl font-black text-indigo-600" x-text="p.score || 0"></span>
+                                                    </div>
+                                                    <div class="flex items-center gap-1 bg-purple-100 px-3 py-1 rounded-full text-purple-600">
+                                                        <span class="text-xs font-bold uppercase">Q</span>
+                                                        <span class="text-lg font-black" x-text="(p.qIndex !== undefined && p.qIndex > -1) ? (p.qIndex < 500 ? (p.qIndex + 1) : 'Done') : 'Lobby'"></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                    
+                                    <div class="mt-8">
+                                         <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-8 rounded-xl shadow-lg"
+                                            @click="forceEndGame">
+                                            End Game & Show Results 🏁
+                                         </button>
+                                    </div>
+                                </div>
+                            </template>
+
                         </div>
                     </div>
                 </div>
@@ -405,20 +518,54 @@ admin.get('/game/:sessionId', async (c) => {
                             leaderboard: [],
                             currentQuestion: config.initialQuestion || null,
                             answersCount: 0,
+                            mode: config.mode || 'HOST',
                             ws: null,
                             init() {
+                                // Init players for self paced
+                                if (config.initialProgress) {
+                                    this.players = this.players.map(p => {
+                                        const prog = config.initialProgress.find(ip => ip.id === p.id);
+                                        return { ...p, 
+                                            qIndex: prog ? prog.qIndex : -1,
+                                            score: prog ? prog.score : (p.score || 0)
+                                        };
+                                    });
+                                }
+
                                 this.ws = new WebSocket('ws://' + window.location.host + '/ws?sessionId=${session.pinCode}&role=HOST'); // Use PIN as Room ID
                                 this.ws.onmessage = (event) => {
                                     const data = JSON.parse(event.data);
                                     if (data.type === 'PLAYER_JOINED') {
-                                        this.players.push({ id: data.participantId, name: data.name });
+                                        // Avoid dupes
+                                        if (!this.players.find(p => p.id == data.participantId)) {
+                                            this.players.push({ id: data.participantId, name: data.name, qIndex: -1, score: 0 });
+                                        }
                                     }
                                     if (data.type === 'START') {
                                         this.started = true;
-                                        // removed auto-nextQuestion to prevent race condition
                                     }
                                     if (data.type === 'PARTICIPANT_ANSWER') {
                                         this.answersCount++;
+                                        const p = this.players.find(p => p.id == data.participantId);
+                                        if (p && data.score !== undefined) {
+                                            p.score = data.score;
+                                        }
+                                    }
+                                    if (data.type === 'PARTICIPANT_PROGRESS' && this.mode === 'SELF_PACED') {
+                                        // Update player progress
+                                        const p = this.players.find(p => p.id == data.participantId);
+                                        if (p) {
+                                            p.qIndex = data.questionIndex;
+                                            if (data.score !== undefined) p.score = data.score;
+                                        }
+                                    }
+                                    if (data.type === 'PARTICIPANT_FINISHED') {
+                                         const p = this.players.find(p => p.id == data.participantId);
+                                         if (p) {
+                                            p.status = 'Finished! 🏆';
+                                            p.qIndex = 999; 
+                                            if (data.score !== undefined) p.score = data.score;
+                                         }
                                     }
                                 };
                             },
@@ -435,6 +582,20 @@ admin.get('/game/:sessionId', async (c) => {
                                 } else if (data.gameOver) {
                                     this.leaderboard = data.leaderboard;
                                     this.showResults = true;
+                                }
+                            },
+                            async forceEndGame() {
+                                // For now just retrieve leaderboard locally or trigger a backend route that calculates it?
+                                // Backend route /game/../next handles end game partially but increments index.
+                                // Let's make a new simpler check-results endpoint or just re-use pacing logic?
+                                // Simpler: Just fetch leaderboard.
+                                // Actually, let's call /next but knowing it might just finish everyone? 
+                                // Proper way: dedicated endpoint. For now hack:
+                                const res = await fetch('/admin/game/${session.id}/end', { method: 'POST' }); 
+                                const data = await res.json();
+                                if (data.gameOver || data.leaderboard) {
+                                     this.leaderboard = data.leaderboard || [];
+                                     this.showResults = true;
                                 }
                             }
                         }

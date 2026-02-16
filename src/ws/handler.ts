@@ -50,11 +50,81 @@ export const websocketHandler = {
                 participantId: data.participantId,
                 name: data.name
             });
+
+            // Check if Self Paced and already started?
+            const { db } = require('../index');
+            const { gameSessions, quizzes, participants, questions, options } = require('../db/schema');
+            const { eq } = require('drizzle-orm');
+            
+            const session = await db.select().from(gameSessions).where(eq(gameSessions.pinCode, gameId)).get();
+            if (session && session.status === 'ACTIVE') {
+                 const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
+                 if (quiz.mode === 'SELF_PACED') {
+                     const participant = await db.select().from(participants).where(eq(participants.id, parseInt(data.participantId))).get();
+                     // If fresh join, index might be -1.
+                     let idx = participant.currentQuestionIndex;
+                     if (idx === -1) {
+                         idx = 0;
+                         await db.update(participants).set({ currentQuestionIndex: 0 }).where(eq(participants.id, participant.id));
+                     }
+                     
+                     // Send current question
+                     const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, session.quizId)).all();
+                     if (idx < quizQuestions.length) {
+                         const nextQ = quizQuestions[idx];
+                         const qOptions = await db.select({ id: options.id, text: options.text }).from(options).where(eq(options.questionId, nextQ.id)).all();
+                         ws.send(JSON.stringify({ 
+                            type: 'NEXT_QUESTION', 
+                            question: {
+                                text: nextQ.text,
+                                timeLimit: nextQ.timeLimit,
+                                options: qOptions
+                            }
+                        }));
+                     }
+                 }
+            }
         }
         
         // Host starts game
         if (data.type === 'START_GAME' && ws.data.role === 'HOST') {
+            const { db } = require('../index');
+            const { gameSessions, quizzes, questions, options, participants } = require('../db/schema');
+            const { eq } = require('drizzle-orm');
+
+            // 1. Update Session Status to ACTIVE
+            await db.update(gameSessions)
+                .set({ status: 'ACTIVE', startTime: new Date() })
+                .where(eq(gameSessions.pinCode, gameId));
+
+            // 2. Broadcast START to transition everyone to /play or active state
             broadcast(gameId, { type: 'START' });
+            
+            const session = await db.select().from(gameSessions).where(eq(gameSessions.pinCode, gameId)).get();
+            const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
+            
+            if (quiz.mode === 'SELF_PACED') {
+                const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, session.quizId)).all();
+                if (quizQuestions.length > 0) {
+                     const nextQ = quizQuestions[0];
+                     const qOptions = await db.select({ id: options.id, text: options.text }).from(options).where(eq(options.questionId, nextQ.id)).all();
+                     
+                     // 3. Initialize all participants to index 0 in DB
+                     await db.update(participants)
+                        .set({ currentQuestionIndex: 0 })
+                        .where(eq(participants.sessionId, session.id));
+
+                     // 4. Send first question to all
+                     broadcast(gameId, {
+                        type: 'NEXT_QUESTION', 
+                        question: {
+                            text: nextQ.text,
+                            timeLimit: nextQ.timeLimit,
+                            options: qOptions
+                        }
+                    });
+                }
+            }
         }
         
         // Host Next Question
@@ -70,7 +140,7 @@ export const websocketHandler = {
         // Participant Answer
         if (data.type === 'ANSWER' && ws.data.role === 'PARTICIPANT') {
             const { db } = require('../index');
-            const { questions, options, answers, participants, gameSessions } = require('../db/schema');
+            const { questions, options, answers, participants, gameSessions, quizzes } = require('../db/schema');
             const { eq, and } = require('drizzle-orm');
 
             // data: { type: 'ANSWER', participantId: ..., optionId: ..., timeTaken: ... }
@@ -114,12 +184,59 @@ export const websocketHandler = {
                 type: 'PARTICIPANT_ANSWER',
                 participantId: ws.data.userId,
                 name: ws.data.name,
-                isCorrect, // Host might want to know for stats
-                points
+                isCorrect, 
+                points,
+                score: (participant.score || 0) + points
             });
             
-            // Ack to Participant?
+            // Ack to Participant
             ws.send(JSON.stringify({ type: 'ANSWER_RECEIVED', points, score: (participant.score || 0) + points }));
+
+            // SELF PACED LOGIC
+            // quizzes already imported above
+            const session = await db.select().from(gameSessions).where(eq(gameSessions.pinCode, gameId)).get();
+            const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
+
+            if (quiz.mode === 'SELF_PACED') {
+                 // 1. Advance Participant Index
+                 const nextIndex = (participant.currentQuestionIndex || 0) + 1;
+                 await db.update(participants).set({ currentQuestionIndex: nextIndex }).where(eq(participants.id, participantId));
+
+                 // 2. Fetch Next Question
+                 const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, session.quizId)).all();
+                 
+                 if (nextIndex >= quizQuestions.length) {
+                     // Finished
+                      ws.send(JSON.stringify({ type: 'GAME_OVER_SELF', score: (participant.score || 0) + points }));
+                      // Notify Host of finish
+                      broadcast(gameId, { 
+                          type: 'PARTICIPANT_FINISHED', 
+                          participantId: ws.data.userId,
+                          score: (participant.score || 0) + points 
+                      });
+                 } else {
+                     const nextQ = quizQuestions[nextIndex];
+                     const qOptions = await db.select({ id: options.id, text: options.text }).from(options).where(eq(options.questionId, nextQ.id)).all();
+                     
+                     // Send Next Question ONLY to this participant
+                     ws.send(JSON.stringify({ 
+                        type: 'NEXT_QUESTION', 
+                        question: {
+                            text: nextQ.text,
+                            timeLimit: nextQ.timeLimit,
+                            options: qOptions
+                        }
+                    }));
+                    
+                    // Notify Host of progress
+                    broadcast(gameId, { 
+                        type: 'PARTICIPANT_PROGRESS', 
+                        participantId: ws.data.userId, 
+                        questionIndex: nextIndex,
+                        score: (participant.score || 0) + points 
+                    });
+                 }
+            }
         }
 
     } catch (e) {

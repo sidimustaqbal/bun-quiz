@@ -59,11 +59,35 @@ game.post('/join', async (c) => {
     const session = await db.select().from(gameSessions).where(eq(gameSessions.pinCode, pin)).get();
     
     if (!session) {
-        return c.text('Game not found!', 404); // Improve UI later
+        return c.html(Layout({
+            title: 'Game Not Found',
+            children: html`
+                <div class="flex flex-col items-center justify-center min-h-[60vh] text-center p-4">
+                    <div class="card max-w-md w-full animate-bounce-slow">
+                        <div class="text-6xl mb-4">🕵️‍♂️</div>
+                        <h1 class="text-3xl font-black text-primary mb-4">Oops! Game Not Found</h1>
+                        <p class="text-gray-600 mb-6 font-medium text-lg">We couldn't find a game with that PIN. Double check and try again!</p>
+                        <a href="/" class="btn-primary inline-block w-full text-center">Back to Join</a>
+                    </div>
+                </div>
+            `
+        }), 404);
     }
 
     if (session.status !== 'WAITING') {
-        return c.text('Game already started or finished!', 400);
+        return c.html(Layout({
+            title: 'Game Started',
+            children: html`
+                <div class="flex flex-col items-center justify-center min-h-[60vh] text-center p-4">
+                    <div class="card max-w-md w-full">
+                        <div class="text-6xl mb-4">🏃‍♂️</div>
+                        <h1 class="text-3xl font-black text-secondary mb-4">Too Late!</h1>
+                        <p class="text-gray-600 mb-6 font-medium text-lg text-pretty">Wait, this game has already started or finished. You can't join right now!</p>
+                        <a href="/" class="btn-primary inline-block w-full text-center">Join Another?</a>
+                    </div>
+                </div>
+            `
+        }), 400);
     }
 
     // Register participant
@@ -96,6 +120,7 @@ game.get('/play', async (c) => {
     // Restore State
     let initialState = 'WAITING';
     let currentOptions: { id: number; text: string }[] = [];
+    let currentQuestionText: string | null = null;
     
     if (session.currentQuestionIndex !== null && session.currentQuestionIndex >= 0) {
         // Fetch current question
@@ -110,6 +135,7 @@ game.get('/play', async (c) => {
         
         if (q) {
             initialState = 'QUESTION';
+            currentQuestionText = q.text;
             // Fetch options
             currentOptions = await db.select({ id: options.id, text: options.text }).from(options).where(eq(options.questionId, q.id)).all();
 
@@ -125,6 +151,50 @@ game.get('/play', async (c) => {
                 initialState = 'ANSWERED';
             }
         }
+    } else {
+         // Maybe Self Paced?
+         // We should check if game is active AND self paced
+         // But even if host hasn't started, index is -1.
+         // If started, index is 0.
+         // Let's rely on the Participant's index for Self Paced.
+         // But wait, `session.currentQuestionIndex` is for HOST paced.
+         // For Self Paced, we use `participant.currentQuestionIndex`.
+         
+         const { quizzes } = require('../db/schema');
+         const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
+         
+         if (quiz && quiz.mode === 'SELF_PACED' && session.status === 'ACTIVE') {
+             const pIndex = participant.currentQuestionIndex !== null ? participant.currentQuestionIndex : -1;
+             
+             if (pIndex >= 0) {
+                 // Fetch this specific question
+                 const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, session.quizId)).all();
+                 if (pIndex < quizQuestions.length) {
+                     const q = quizQuestions[pIndex];
+                     if (q) {
+                         initialState = 'QUESTION';
+                         currentQuestionText = q.text;
+                         currentOptions = await db.select({ id: options.id, text: options.text }).from(options).where(eq(options.questionId, q.id)).all();
+                         
+                          // Check if answered
+                        const ans = await db.select().from(answers).where(
+                            and(
+                                eq(answers.participantId, participant.id),
+                                eq(answers.questionId, q.id)
+                            )
+                        ).get();
+
+                        if (ans) {
+                            initialState = 'ANSWERED';
+                            initialState = 'QUESTION';
+                        }
+                     }
+                 } else {
+                     initialState = 'RESULT';
+                     // Finished
+                 }
+             }
+         }
     }
     
     return c.html(Layout({
@@ -134,7 +204,8 @@ game.get('/play', async (c) => {
             <script>
                 window.__playerConfig = ${raw(JSON.stringify({
                     initialState: initialState,
-                    initialOptions: currentOptions
+                    initialOptions: currentOptions,
+                    initialQuestionText: currentQuestionText
                 }))};
             </script>
             <div x-data="playerGame()" class="flex flex-col h-screen bg-gray-50 overflow-hidden">
@@ -161,7 +232,7 @@ game.get('/play', async (c) => {
                      <div class="flex-1 flex flex-col justify-center mb-4">
                         <div class="bg-white p-6 rounded-3xl shadow-lg border-b-8 border-gray-200 text-center mb-6">
                             <h2 class="text-xl font-bold text-gray-400 uppercase tracking-widest mb-2">Question Live</h2>
-                            <p class="text-4xl font-black text-gray-800">Look up! 👆</p>
+                            <p class="text-3xl font-black text-gray-800" x-text="currentQuestionText || 'Look up! 👆'"></p>
                         </div>
                         <!-- Timer Bar -->
                         <div class="w-full bg-gray-300 rounded-full h-3 overflow-hidden">
@@ -253,6 +324,7 @@ game.get('/play', async (c) => {
                             score: ${participant.score},
                             timer: 30,
                             currentOptions: config.initialOptions || [],
+                            currentQuestionText: config.initialQuestionText || '',
                             leaderboard: [],
                             ws: null,
                             init() {
@@ -262,6 +334,7 @@ game.get('/play', async (c) => {
                                     if (data.type === 'NEXT_QUESTION') {
                                         this.state = 'QUESTION';
                                         this.timer = 100; // Mock timer reset
+                                        this.currentQuestionText = data.question.text || '';
                                         this.currentOptions = data.question.options || []; // Load options
                                         // Start countdown locally or sync with server
                                     }
@@ -273,6 +346,12 @@ game.get('/play', async (c) => {
                                     if (data.type === 'GAME_OVER') {
                                         this.state = 'RESULT';
                                         this.leaderboard = data.leaderboard || [];
+                                    }
+                                    if (data.type === 'GAME_OVER_SELF') {
+                                        this.state = 'RESULT';
+                                        this.score = data.score;
+                                        // Self paced might not have leaderboard ready
+                                        this.leaderboard = []; 
                                     }
                                 };
                             },
