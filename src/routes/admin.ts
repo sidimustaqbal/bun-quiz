@@ -157,6 +157,10 @@ admin.get('/quizzes/:id/host', async (c) => {
     const user = c.get('user');
     const quizId = parseInt(c.req.param('id'));
     
+    // Security: Ensure owner
+    const quiz = await db.select().from(quizzes).where(eq(quizzes.id, quizId)).get();
+    if (!quiz || quiz.hostId !== user.id) return c.text('Unauthorized', 403);
+    
     // Generate PIN
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -177,9 +181,14 @@ admin.get('/quizzes/:id/host', async (c) => {
 
 // API: Next Question
 admin.post('/game/:sessionId/next', async (c) => {
+    const user = c.get('user');
     const sessionId = parseInt(c.req.param('sessionId'));
     const session = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId)).get();
     if (!session) return c.json({error: 'Session not found'}, 404);
+
+    // Security: Ensure owner
+    const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
+    if (!quiz || quiz.hostId !== user.id) return c.json({error: 'Unauthorized'}, 403);
 
     // Get Quiz Questions
     const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, session.quizId)).all();
@@ -234,6 +243,10 @@ admin.get('/game/:sessionId', async (c) => {
     
     if(!session) return c.redirect('/admin/dashboard');
 
+    // Security: Ensure owner
+    const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
+    if (!quiz || quiz.hostId !== user.id) return c.redirect('/admin/dashboard');
+
     // Restore State: Fetch current players
     const currentPlayers = await db.select({ id: participants.id, name: participants.name }).from(participants).where(eq(participants.sessionId, sessionId)).all();
 
@@ -267,7 +280,7 @@ admin.get('/game/:sessionId', async (c) => {
                 <!-- Lobby Screen -->
                 <div x-show="!started" class="w-full max-w-5xl mx-auto text-center">
                     <div class="mb-12">
-                         <span class="text-xl font-bold text-purple-200 uppercase tracking-[0.2em] mb-2 block">Join at <span class="bg-white text-purple-700 px-2 rounded">fun-quiz.com</span> with PIN:</span>
+                         <span class="text-xl font-bold text-purple-200 uppercase tracking-[0.2em] mb-2 block">Join at <span class="bg-white text-purple-700 px-2 rounded">quiz.pediacode.web.id</span> with PIN:</span>
                          <h1 class="text-9xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-pink-500 to-purple-500 drop-shadow-2xl font-mono tracking-wider my-4">${session.pinCode}</h1>
                     </div>
 
