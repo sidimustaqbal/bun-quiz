@@ -5,41 +5,46 @@ import { eq, and } from 'drizzle-orm';
 import { Layout } from '../lib/html';
 import { html, raw } from 'hono/html';
 import { setCookie, getCookie } from 'hono/cookie';
+import { getLang, getT } from '../lib/i18n';
 
 const game = new Hono();
 
 // Join Landing Page (Scan QR lands here with ?pin=...)
 game.get('/', (c) => {
     const pin = c.req.query('pin') || '';
+    const lang = getLang(c);
+    const t = getT(lang);
+
     return c.html(Layout({
-        title: 'Join Game',
+        title: t('game.join_title'),
         fullWidth: true,
+        lang,
         children: html`
             <div class="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-b from-purple-500 to-indigo-600">
                 <div class="w-full max-w-sm bg-white rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] overflow-hidden">
                     <div class="bg-purple-100 p-8 text-center border-b-4 border-purple-200">
                         <span class="text-6xl mb-2 block">🎉</span>
                         <h1 class="text-4xl font-black text-purple-600 tracking-tight">FunQuiz!</h1>
-                        <p class="text-purple-400 font-bold uppercase tracking-widest text-xs mt-2">Join the Party</p>
+                        <p class="text-purple-400 font-bold uppercase tracking-widest text-xs mt-2">${t('game.join_party')}</p>
                     </div>
                     
                     <form action="/join" method="post" class="p-8 space-y-6">
                         <div>
-                            <label class="block font-bold text-gray-500 text-sm mb-2 uppercase tracking-wide">Game PIN</label>
+                            <label class="block font-bold text-gray-500 text-sm mb-2 uppercase tracking-wide">${t('game.pin_label')}</label>
                             <input type="tel" name="pin" value="${pin}" placeholder="000 000" required 
                                 class="w-full text-center text-4xl font-mono font-bold tracking-[0.2em] border-2 border-gray-200 rounded-xl p-4 focus:border-purple-500 focus:ring-4 focus:ring-purple-100 outline-none transition placeholder-gray-300 text-gray-800">
                         </div>
                         <div>
-                            <label class="block font-bold text-gray-500 text-sm mb-2 uppercase tracking-wide">Nickname</label>
-                            <input type="text" name="name" placeholder="Enter your name" required maxlength="15"
+                            <label class="block font-bold text-gray-500 text-sm mb-2 uppercase tracking-wide">${t('game.nickname_label')}</label>
+                            <input type="text" name="name" placeholder="${t('game.enter_name')}" required maxlength="15"
                                 class="w-full text-center text-2xl font-bold border-2 border-gray-200 rounded-xl p-4 focus:border-purple-500 focus:ring-4 focus:ring-purple-100 outline-none transition placeholder-gray-300 text-gray-800">
                         </div>
                         <button class="w-full bg-purple-600 hover:bg-purple-700 text-white font-black text-xl py-5 rounded-2xl shadow-xl transform transition active:scale-95 hover:-translate-y-1">
-                            Enter Game 🚀
+                            ${t('game.enter_game')}
                         </button>
                     </form>
                 </div>
-                <p class="text-white/50 text-sm mt-8 font-medium">Ready to play?</p>
+                <p class="text-white/50 text-sm mt-8 font-medium">${t('game.ready')}</p>
             </div>
         `
     }));
@@ -55,19 +60,22 @@ game.post('/join', async (c) => {
     const body = await c.req.parseBody();
     const pin = body['pin'] as string;
     const name = body['name'] as string;
+    const lang = getLang(c);
+    const t = getT(lang);
 
     const session = await db.select().from(gameSessions).where(eq(gameSessions.pinCode, pin)).get();
     
     if (!session) {
         return c.html(Layout({
-            title: 'Game Not Found',
+            title: t('game.not_found_title'),
+            lang,
             children: html`
                 <div class="flex flex-col items-center justify-center min-h-[60vh] text-center p-4">
                     <div class="card max-w-md w-full animate-bounce-slow">
                         <div class="text-6xl mb-4">🕵️‍♂️</div>
-                        <h1 class="text-3xl font-black text-primary mb-4">Oops! Game Not Found</h1>
-                        <p class="text-gray-600 mb-6 font-medium text-lg">We couldn't find a game with that PIN. Double check and try again!</p>
-                        <a href="/" class="btn-primary inline-block w-full text-center">Back to Join</a>
+                        <h1 class="text-3xl font-black text-primary mb-4">${t('game.not_found_heading')}</h1>
+                        <p class="text-gray-600 mb-6 font-medium text-lg">${t('game.not_found_desc')}</p>
+                        <a href="/" class="btn-primary inline-block w-full text-center">${t('game.back_join')}</a>
                     </div>
                 </div>
             `
@@ -76,14 +84,15 @@ game.post('/join', async (c) => {
 
     if (session.status !== 'WAITING') {
         return c.html(Layout({
-            title: 'Game Started',
+            title: t('game.started_title'),
+            lang,
             children: html`
                 <div class="flex flex-col items-center justify-center min-h-[60vh] text-center p-4">
                     <div class="card max-w-md w-full">
                         <div class="text-6xl mb-4">🏃‍♂️</div>
-                        <h1 class="text-3xl font-black text-secondary mb-4">Too Late!</h1>
-                        <p class="text-gray-600 mb-6 font-medium text-lg text-pretty">Wait, this game has already started or finished. You can't join right now!</p>
-                        <a href="/" class="btn-primary inline-block w-full text-center">Join Another?</a>
+                        <h1 class="text-3xl font-black text-secondary mb-4">${t('game.too_late')}</h1>
+                        <p class="text-gray-600 mb-6 font-medium text-lg text-pretty">${t('game.too_late_desc')}</p>
+                        <a href="/" class="btn-primary inline-block w-full text-center">${t('game.join_another')}</a>
                     </div>
                 </div>
             `
@@ -99,7 +108,7 @@ game.post('/join', async (c) => {
     if (!p) return c.text('Failed to join', 500);
 
     // Set auth cookie for participant
-    setCookie(c, 'participant_id', p.id.toString(), { httpOnly: false }); // httpOnly false so JS can read if needed, or secure it.
+    setCookie(c, 'participant_id', p.id.toString(), { httpOnly: false });
     
     return c.redirect('/lobby');
 });
@@ -109,13 +118,14 @@ game.get('/play', async (c) => {
     const pId = getCookie(c, 'participant_id');
     if (!pId) return c.redirect('/');
     
-    // We need to fetch session details, but optimization: assume validated or handle error in UI
     const participant = await db.select().from(participants).where(eq(participants.id, parseInt(pId))).get();
     if(!participant) return c.redirect('/');
     
-    // Check if game session is actually active?
     const session = await db.select().from(gameSessions).where(eq(gameSessions.id, participant.sessionId)).get();
     if (!session) return c.redirect('/');
+
+    const lang = getLang(c);
+    const t = getT(lang);
 
     // Restore State
     let initialState = 'WAITING';
@@ -123,10 +133,6 @@ game.get('/play', async (c) => {
     let currentQuestionText: string | null = null;
     
     if (session.currentQuestionIndex !== null && session.currentQuestionIndex >= 0) {
-        // Fetch current question
-        // We need to order to get the correct index, assuming ID order or created order if not specified? 
-        // Best to use same query logic as admin (select all) or simple offset
-        // Assuming questions are stable.
         const q = await db.select().from(questions)
             .where(eq(questions.quizId, session.quizId))
             .limit(1)
@@ -136,10 +142,8 @@ game.get('/play', async (c) => {
         if (q) {
             initialState = 'QUESTION';
             currentQuestionText = q.text;
-            // Fetch options
             currentOptions = await db.select({ id: options.id, text: options.text }).from(options).where(eq(options.questionId, q.id)).all();
 
-            // Check if answered
             const ans = await db.select().from(answers).where(
                 and(
                     eq(answers.participantId, participant.id),
@@ -152,14 +156,6 @@ game.get('/play', async (c) => {
             }
         }
     } else {
-         // Maybe Self Paced?
-         // We should check if game is active AND self paced
-         // But even if host hasn't started, index is -1.
-         // If started, index is 0.
-         // Let's rely on the Participant's index for Self Paced.
-         // But wait, `session.currentQuestionIndex` is for HOST paced.
-         // For Self Paced, we use `participant.currentQuestionIndex`.
-         
          const { quizzes } = require('../db/schema');
          const quiz = await db.select().from(quizzes).where(eq(quizzes.id, session.quizId)).get();
          
@@ -167,7 +163,6 @@ game.get('/play', async (c) => {
              const pIndex = participant.currentQuestionIndex !== null ? participant.currentQuestionIndex : -1;
              
              if (pIndex >= 0) {
-                 // Fetch this specific question
                  const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, session.quizId)).all();
                  if (pIndex < quizQuestions.length) {
                      const q = quizQuestions[pIndex];
@@ -176,13 +171,12 @@ game.get('/play', async (c) => {
                          currentQuestionText = q.text;
                          currentOptions = await db.select({ id: options.id, text: options.text }).from(options).where(eq(options.questionId, q.id)).all();
                          
-                          // Check if answered
-                        const ans = await db.select().from(answers).where(
-                            and(
-                                eq(answers.participantId, participant.id),
-                                eq(answers.questionId, q.id)
-                            )
-                        ).get();
+                         const ans = await db.select().from(answers).where(
+                             and(
+                                 eq(answers.participantId, participant.id),
+                                 eq(answers.questionId, q.id)
+                             )
+                         ).get();
 
                         if (ans) {
                             initialState = 'ANSWERED';
@@ -191,15 +185,15 @@ game.get('/play', async (c) => {
                      }
                  } else {
                      initialState = 'RESULT';
-                     // Finished
                  }
              }
          }
     }
     
     return c.html(Layout({
-        title: 'Play!',
+        title: t('game.play_title'),
         fullWidth: true,
+        lang,
         children: html`
             <script>
                 window.__playerConfig = ${raw(JSON.stringify({
@@ -213,7 +207,7 @@ game.get('/play', async (c) => {
                 <div class="bg-white p-4 shadow-md flex justify-between items-center z-10">
                      <span class="font-black text-gray-700 text-lg truncate max-w-[150px]">${participant.name}</span>
                      <div class="flex items-center gap-2">
-                        <span class="text-xs font-bold text-gray-400 uppercase">Score</span>
+                        <span class="text-xs font-bold text-gray-400 uppercase">${t('game.score')}</span>
                         <span class="bg-purple-600 text-white px-4 py-1 rounded-full font-bold shadow-sm" x-text="score">${participant.score}</span>
                      </div>
                 </div>
@@ -223,16 +217,16 @@ game.get('/play', async (c) => {
                     <div class="mb-8 p-6 bg-white/10 rounded-full animate-pulse">
                         <span class="text-6xl">👀</span>
                     </div>
-                    <h1 class="text-3xl font-black mb-4">Eyes on the Screen!</h1>
-                    <p class="text-white/80 text-lg">Waiting for the next question...</p>
+                    <h1 class="text-3xl font-black mb-4">${t('game.eyes_on_screen')}</h1>
+                    <p class="text-white/80 text-lg">${t('game.waiting_question')}</p>
                 </div>
 
                 <!-- QUESTION STATE -->
                 <div x-show="state === 'QUESTION'" class="flex-1 flex flex-col p-4 bg-gray-100" x-cloak>
                      <div class="flex-1 flex flex-col justify-center mb-4">
                         <div class="bg-white p-6 rounded-3xl shadow-lg border-b-8 border-gray-200 text-center mb-6">
-                            <h2 class="text-xl font-bold text-gray-400 uppercase tracking-widest mb-2">Question Live</h2>
-                            <p class="text-3xl font-black text-gray-800" x-text="currentQuestionText || 'Look up! 👆'"></p>
+                            <h2 class="text-xl font-bold text-gray-400 uppercase tracking-widest mb-2">${t('game.question_live')}</h2>
+                            <p class="text-3xl font-black text-gray-800" x-text="currentQuestionText || '${t('game.look_up')}'"></p>
                         </div>
                         <!-- Timer Bar -->
                         <div class="w-full bg-gray-300 rounded-full h-3 overflow-hidden">
@@ -267,22 +261,20 @@ game.get('/play', async (c) => {
                     <div class="mb-8 bg-white/20 p-8 rounded-full">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-24 w-24 text-white animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
                     </div>
-                    <h1 class="text-4xl font-black mb-2">Answer Sent!</h1>
-                    <p class="text-indigo-200 text-xl font-bold">Fingers crossed... 🤞</p>
+                    <h1 class="text-4xl font-black mb-2">${t('game.answer_sent')}</h1>
+                    <p class="text-indigo-200 text-xl font-bold">${t('game.fingers_crossed')}</p>
                     <div class="mt-8 bg-black/20 rounded-xl p-4">
-                        <p class="text-sm font-bold uppercase tracking-widest text-indigo-300">Your Score</p>
+                        <p class="text-sm font-bold uppercase tracking-widest text-indigo-300">${t('game.your_score')}</p>
                         <p class="text-3xl font-black text-white" x-text="score">0</p>
                     </div>
                 </div>
 
-
-
                  <!-- RESULT STATE -->
                  <div x-show="state === 'RESULT'" class="flex-1 flex flex-col p-4 bg-purple-600 text-center overflow-y-auto" x-cloak>
                     <div class="mb-6 mt-4">
-                        <h1 class="text-4xl font-black text-white mb-2">Game Over!</h1>
+                        <h1 class="text-4xl font-black text-white mb-2">${t('game.game_over')}</h1>
                         <div class="bg-white/20 rounded-xl p-4 inline-block backdrop-blur-sm">
-                            <span class="block text-xs font-bold text-indigo-100 uppercase tracking-widest">Your Final Score</span>
+                            <span class="block text-xs font-bold text-indigo-100 uppercase tracking-widest">${t('game.final_score')}</span>
                             <span class="text-5xl font-black text-white" x-text="score">0</span>
                         </div>
                     </div>
@@ -311,7 +303,7 @@ game.get('/play', async (c) => {
 
                     <div class="mt-4 pb-12">
                          <a href="/" class="inline-block bg-white text-purple-600 font-bold py-3 px-8 rounded-full shadow-lg hover:bg-gray-100 transition transform hover:scale-105">
-                            Leave Game 🏠
+                            ${t('game.leave')}
                          </a>
                     </div>
                 </div>
@@ -333,15 +325,12 @@ game.get('/play', async (c) => {
                                     const data = JSON.parse(event.data);
                                     if (data.type === 'NEXT_QUESTION') {
                                         this.state = 'QUESTION';
-                                        this.timer = 100; // Mock timer reset
+                                        this.timer = 100;
                                         this.currentQuestionText = data.question.text || '';
-                                        this.currentOptions = data.question.options || []; // Load options
-                                        // Start countdown locally or sync with server
+                                        this.currentOptions = data.question.options || [];
                                     }
                                     if (data.type === 'ANSWER_RECEIVED') {
-                                        // Update score locally if we want instant feedback or wait for server
                                         if (data.score) this.score = data.score;
-                                        // Keep state as ANSWERED until next question? Or show mini result?
                                     }
                                     if (data.type === 'GAME_OVER') {
                                         this.state = 'RESULT';
@@ -350,7 +339,6 @@ game.get('/play', async (c) => {
                                     if (data.type === 'GAME_OVER_SELF') {
                                         this.state = 'RESULT';
                                         this.score = data.score;
-                                        // Self paced might not have leaderboard ready
                                         this.leaderboard = []; 
                                     }
                                 };
@@ -361,7 +349,7 @@ game.get('/play', async (c) => {
                                     type: 'ANSWER',
                                     participantId: ${participant.id},
                                     optionId: optionId,
-                                    timeTaken: 1000 // mock
+                                    timeTaken: 1000
                                 }));
                             }
                         }
@@ -380,19 +368,20 @@ game.get('/lobby', async (c) => {
     const participant = await db.select().from(participants).where(eq(participants.id, parseInt(pId))).get();
     if(!participant) return c.redirect('/');
 
-    // Fetch session for PIN
     const session = await db.select().from(gameSessions).where(eq(gameSessions.id, participant.sessionId)).get();
     if (!session) return c.redirect('/');
 
-    // TODO: Verify session status?
+    const lang = getLang(c);
+    const t = getT(lang);
 
     return c.html(Layout({
-        title: 'Lobby',
+        title: t('game.lobby_title'),
         fullWidth: true,
+        lang,
         children: html`
             <div class="flex flex-col items-center justify-center min-h-screen bg-purple-600 p-4 text-center">
                 <div class="bg-white p-8 rounded-[2rem] shadow-2xl max-w-sm w-full animate-bounce-in">
-                    <h1 class="text-3xl font-black text-gray-800 mb-6 uppercase tracking-wider">You're In!</h1>
+                    <h1 class="text-3xl font-black text-gray-800 mb-6 uppercase tracking-wider">${t('game.youre_in')}</h1>
                     
                     <div class="relative mb-8">
                         <div class="absolute inset-0 bg-gradient-to-tr from-pink-400 to-purple-500 rounded-full blur opacity-75 animate-pulse"></div>
@@ -402,17 +391,17 @@ game.get('/lobby', async (c) => {
                     </div>
 
                     <div class="bg-gray-100 p-4 rounded-xl border-2 border-gray-200 mb-6">
-                         <p class="text-gray-500 text-xs font-bold uppercase mb-1">Your Nickname</p>
+                         <p class="text-gray-500 text-xs font-bold uppercase mb-1">${t('game.your_nickname')}</p>
                          <span class="text-3xl font-extrabold text-purple-600 break-all">${participant.name}</span>
                     </div>
 
                     <p class="text-lg text-gray-500 font-bold animate-pulse flex items-center justify-center gap-2">
                         <span class="w-2 h-2 bg-green-500 rounded-full"></span>
-                        Waiting for host...
+                        ${t('game.waiting_host')}
                     </p>
                 </div>
                 
-                <p class="mt-8 text-white/60 font-medium text-sm">Do not close this window</p>
+                <p class="mt-8 text-white/60 font-medium text-sm">${t('game.dont_close')}</p>
 
                 <!-- WS Connection for Participant -->
                 <script>
